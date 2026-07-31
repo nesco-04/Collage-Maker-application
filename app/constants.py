@@ -25,16 +25,19 @@ MM_PER_INCH: Final[float] = 25.4
 class PrintSizeId(str, Enum):
     """Identifiers for the supported standard print sizes."""
 
+    FOUR_BY_SIX = "4x6"
     FIVE_BY_SEVEN = "5x7"
     EIGHT_BY_TEN = "8x10"
 
 
 PRINT_SIZES_INCHES: Final[dict[PrintSizeId, tuple[float, float]]] = {
+    PrintSizeId.FOUR_BY_SIX: (4.0, 6.0),
     PrintSizeId.FIVE_BY_SEVEN: (5.0, 7.0),
     PrintSizeId.EIGHT_BY_TEN: (8.0, 10.0),
 }
 
 PRINT_SIZE_LABELS: Final[dict[PrintSizeId, str]] = {
+    PrintSizeId.FOUR_BY_SIX: "4 x 6 inches",
     PrintSizeId.FIVE_BY_SEVEN: "5 x 7 inches",
     PrintSizeId.EIGHT_BY_TEN: "8 x 10 inches",
 }

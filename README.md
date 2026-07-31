@@ -1,16 +1,18 @@
 # Collage Maker
 
-A Windows desktop application for building 5x7 or 8x10 inch print collages
+A Windows desktop application for building 4x6, 5x7, or 8x10 inch print collages
 from 111 mm x 86 mm photo slots. Built with **PySide6** (GUI) and
 **Pillow** (image processing), with all layout/crop math implemented as
 pure, unit-tested functions.
 
 ## Features
 
-- Choose a **5 x 7 in** (2 slots, portrait) or **8 x 10 in** (4 slots,
-  landscape) print layout.
+- Choose a **4 x 6 in** (1 slot, landscape), **5 x 7 in** (2 slots,
+  portrait), or **8 x 10 in** (4 slots, landscape) print layout.
 - Import 1 to N photos (JPEG, PNG, TIFF, BMP, WebP) via the native Windows
   file picker.
+- Photos are automatically divided into ordered print batches based on
+  the selected layout capacity.
 - Each photo automatically fills its slot ("cover" scaling) without
   distortion, then can be dragged, arrow-key-nudged, replaced, or removed.
 - The entire print stays visible and correctly proportioned as you resize
@@ -100,11 +102,15 @@ installed**. Distribute the entire `dist\CollageMaker\` folder.
 
 ## How to use the app
 
-1. **Selection page**: pick 5x7 or 8x10, click **Browse for Photos...**,
-   select 1 to the layout's maximum number of images, then **Continue**.
+1. **Selection page**: pick 4x6, 5x7, or 8x10, click **Browse for Photos...**,
+   select any number of images, then **Continue**. The app shows how many
+   output prints the selection will create. Browsing again appends more
+   photos to the current batch.
    Highlight one or more photos and use **Remove Selected**, or use
    **Clear All** to empty the selection.
 2. **Editor page**:
+   - Use **Previous Print** and **Next Print** to move through the batch.
+     Crop positions are preserved independently for every print.
    - Click a slot to select it (blue outline).
    - Drag directly on an image to reposition it within its slot. A
      portrait photo can be dragged vertically; a landscape photo can be
@@ -119,8 +125,10 @@ installed**. Distribute the entire `dist\CollageMaker\` folder.
      list or crop positions.
    - **Restart** discards the current collage and returns to a clean
      selection page with no photos selected.
-   - **Export...** opens a Save As dialog (PNG/TIFF/JPEG) and renders the
-     final collage directly from your original files at 300 DPI.
+   - **Export All...** opens a Save As dialog (PNG/TIFF/JPEG), renders
+     every print directly from the original files at 300 DPI, and saves
+     multiple outputs with numbered names such as `collage_01.png`,
+     `collage_02.png`, and so on.
 
 ## Image-scaling and crop-position mathematics
 
@@ -189,6 +197,10 @@ always tile with no 1-pixel gaps or overlaps.
 
 | Criterion | Status |
 | --- | --- |
+| Any number of selected photos is split into ordered print batches | `MainWindow._build_states` |
+| Previous/Next navigation preserves each print's crop positions | `EditorPage.load_batch`, `_show_batch_state` |
+| Batch export creates numbered output files | `build_batch_export_paths`, `_ExportWorker` |
+| Selecting 4x6 shows a maximum of 1 image | `SelectionPage._max_slot_count`, `compute_canvas_layout` |
 | Selecting 5x7 shows a maximum of 2 images | `SelectionPage._max_slot_count`, `compute_canvas_layout` |
 | Selecting 8x10 shows a maximum of 4 images | Same as above |
 | Continue works with fewer than the maximum images | `SelectionPage._revalidate` only requires `1 <= count <= max` |

@@ -1,9 +1,10 @@
 """Page 2: responsive collage editor.
 
-Displays the full print canvas (always fully visible, scaled to fit the
-window while preserving aspect ratio), lets the user select, reposition,
-replace, or remove images in each slot, and exports the final collage at
-full print resolution using :mod:`app.image_renderer`.
+Displays each full print canvas in an ordered batch (always fully visible,
+scaled to fit the window while preserving aspect ratio), lets the user
+select, reposition, replace, or remove images in each slot, and exports
+the complete batch at full print resolution using
+:mod:`app.image_renderer`.
 """
 
 from __future__ import annotations
@@ -40,6 +41,23 @@ from app.models import CollageState, ImageAssignment
 logger = logging.getLogger(__name__)
 
 
+def build_batch_export_paths(destination_path: str, count: int) -> list[str]:
+    """Return exact output paths for one or more collage exports."""
+
+    if count <= 0:
+        raise ValueError("count must be positive")
+    stem, extension = os.path.splitext(destination_path)
+    if not extension:
+        extension = ".png"
+    if count == 1:
+        return [stem + extension]
+    number_width = max(2, len(str(count)))
+    return [
+        f"{stem}_{index:0{number_width}d}{extension}"
+        for index in range(1, count + 1)
+    ]
+
+
 class _ExportWorker(QObject):
     """Runs the (potentially slow) final render + save on a background
     thread so the GUI thread never blocks. All Qt widget access happens
@@ -47,15 +65,18 @@ class _ExportWorker(QObject):
 
     finished = Signal(bool, str)
 
-    def __init__(self, state: CollageState, destination_path: str) -> None:
+    def __init__(self, jobs: list[tuple[CollageState, str]]) -> None:
         super().__init__()
-        self._state = state
-        self._destination_path = destination_path
+        self._jobs = jobs
 
     def run(self) -> None:
         try:
-            image = render_collage(self._state)
-            save_collage(image, self._destination_path)
+            for state, destination_path in self._jobs:
+                image = render_collage(state)
+                try:
+                    save_collage(image, destination_path)
+                finally:
+                    image.close()
         except ImageLoadError as exc:
             logger.exception("Export failed: source image error")
             self.finished.emit(False, str(exc))
@@ -69,7 +90,12 @@ class _ExportWorker(QObject):
             logger.exception("Export failed: unexpected error")
             self.finished.emit(False, f"Unexpected error: {exc}")
         else:
-            self.finished.emit(True, self._destination_path)
+            paths = [path for _, path in self._jobs]
+            if len(paths) == 1:
+                message = paths[0]
+            else:
+                message = f"{len(paths)} collages saved in:\n{os.path.dirname(paths[0])}"
+            self.finished.emit(True, message)
 
 
 class CanvasWidget(QWidget):
@@ -167,6 +193,8 @@ class EditorPage(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._state: Optional[CollageState] = None
+        self._states: list[CollageState] = []
+        self._state_index = 0
         self._preview_cache = PreviewCache()
         self._slot_widgets: list[ImageSlotWidget] = []
         self._selected_slot_index: Optional[int] = None
@@ -181,9 +209,21 @@ class EditorPage(QWidget):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(8)
 
+        header_row = QHBoxLayout()
         header = QLabel("Arrange Your Collage")
         header.setStyleSheet("font-size: 18px; font-weight: 600;")
-        root.addWidget(header)
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+        self._previous_button = QPushButton("Previous Print")
+        self._previous_button.clicked.connect(self._on_previous)
+        header_row.addWidget(self._previous_button)
+        self._batch_label = QLabel("Print 0 of 0")
+        self._batch_label.setStyleSheet("font-weight: 600;")
+        header_row.addWidget(self._batch_label)
+        self._next_button = QPushButton("Next Print")
+        self._next_button.clicked.connect(self._on_next)
+        header_row.addWidget(self._next_button)
+        root.addLayout(header_row)
 
         self._grid_widget = QWidget()
         self._grid_layout = QGridLayout(self._grid_widget)
@@ -205,7 +245,7 @@ class EditorPage(QWidget):
         self._center_button.clicked.connect(self._on_center_selected)
 
         self._reset_all_button = QPushButton("Reset All Positions")
-        self._reset_all_button.setToolTip("Recenter every image in the collage")
+        self._reset_all_button.setToolTip("Recenter every image in every print in this batch")
         self._reset_all_button.clicked.connect(self._on_reset_all)
 
         self._replace_button = QPushButton("Replace Image...")
@@ -224,8 +264,8 @@ class EditorPage(QWidget):
         self._restart_button.setToolTip("Discard this collage and start again with no selected photos")
         self._restart_button.clicked.connect(self.restart_requested.emit)
 
-        self._export_button = QPushButton("Export...")
-        self._export_button.setToolTip("Save the finished collage at full print resolution")
+        self._export_button = QPushButton("Export All...")
+        self._export_button.setToolTip("Save every print in this batch at full print resolution")
         self._export_button.clicked.connect(self._on_export)
 
         for button in (
@@ -244,6 +284,19 @@ class EditorPage(QWidget):
         self._update_slot_action_buttons()
 
     # -- state loading ---------------------------------------------------
+
+    def load_batch(
+        self, states: list[CollageState], initial_index: int = 0
+    ) -> None:
+        """Load an ordered batch and display one print at a time."""
+
+        if not states:
+            raise ValueError("A batch must contain at least one collage state")
+        if not 0 <= initial_index < len(states):
+            raise IndexError("initial_index is outside the batch")
+        self._states = states
+        self._state_index = initial_index
+        self.load_state(states[initial_index])
 
     def load_state(self, state: CollageState) -> None:
         """Populate the editor for a (possibly new) CollageState.
@@ -278,12 +331,36 @@ class EditorPage(QWidget):
         self._canvas_widget._relayout()
 
         self._status_label.setText("No slot selected.")
+        self._update_batch_controls()
         self._update_slot_action_buttons()
+
+    def _update_batch_controls(self) -> None:
+        count = len(self._states)
+        self._batch_label.setText(
+            f"Print {self._state_index + 1} of {count}" if count else "Print 0 of 0"
+        )
+        self._previous_button.setEnabled(count > 0 and self._state_index > 0)
+        self._next_button.setEnabled(count > 0 and self._state_index < count - 1)
+        self._export_button.setText("Export All..." if count > 1 else "Export...")
+
+    def _show_batch_state(self, index: int) -> None:
+        if not 0 <= index < len(self._states):
+            return
+        self._state_index = index
+        self.load_state(self._states[index])
+
+    def _on_previous(self) -> None:
+        self._show_batch_state(self._state_index - 1)
+
+    def _on_next(self) -> None:
+        self._show_batch_state(self._state_index + 1)
 
     def clear_state(self) -> None:
         """Release the current collage and restore the editor placeholder."""
 
         self._state = None
+        self._states = []
+        self._state_index = 0
         self._selected_slot_index = None
         self._preview_cache.clear()
         while self._grid_layout.count():
@@ -296,6 +373,7 @@ class EditorPage(QWidget):
         self._aspect_container.set_aspect(5.0, 7.0)
         self._canvas_widget._relayout()
         self._status_label.setText("No slot selected.")
+        self._update_batch_controls()
         self._update_slot_action_buttons()
 
     # -- slot selection ---------------------------------------------------
@@ -343,10 +421,11 @@ class EditorPage(QWidget):
         widget.update()
 
     def _on_reset_all(self) -> None:
-        if self._state is None:
+        if not self._states:
             return
-        for assignment in self._state.assignments.values():
-            assignment.reset_position()
+        for state in self._states:
+            for assignment in state.assignments.values():
+                assignment.reset_position()
         for widget in self._slot_widgets:
             widget.update()
 
@@ -390,16 +469,15 @@ class EditorPage(QWidget):
     # -- export ---------------------------------------------------------
 
     def _on_export(self) -> None:
-        if self._state is None:
+        if not self._states:
             return
 
         warnings = [
             os.path.basename(assignment.source_path)
-            for index, slot in enumerate(self._state.layout.slots)
-            if (assignment := self._state.assignments.get(index)) is not None
-            and image_needs_upscale_warning(
-                assignment, slot.width_mm, slot.height_mm, self._state.export_dpi
-            )
+            for state in self._states
+            for index, slot in enumerate(state.layout.slots)
+            if (assignment := state.assignments.get(index)) is not None
+            and image_needs_upscale_warning(assignment, slot.width_mm, slot.height_mm, state.export_dpi)
         ]
         if warnings:
             proceed = QMessageBox.warning(
@@ -417,16 +495,37 @@ class EditorPage(QWidget):
 
         destination_path, chosen_filter = QFileDialog.getSaveFileName(
             self,
-            "Export collage",
+            "Export collage batch",
             "collage.png",
             "PNG Image (*.png);;TIFF Image (*.tif *.tiff);;JPEG Image (*.jpg *.jpeg)",
         )
         if not destination_path:
             return
+        if not os.path.splitext(destination_path)[1]:
+            if chosen_filter.startswith("TIFF"):
+                destination_path += ".tif"
+            elif chosen_filter.startswith("JPEG"):
+                destination_path += ".jpg"
+            else:
+                destination_path += ".png"
 
-        self._set_busy(True, "Exporting collage...")
+        output_paths = build_batch_export_paths(destination_path, len(self._states))
+        existing_paths = [path for path in output_paths if os.path.exists(path)]
+        if existing_paths:
+            overwrite = QMessageBox.warning(
+                self,
+                "Replace existing files?",
+                f"{len(existing_paths)} output file(s) already exist and will be replaced. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if overwrite != QMessageBox.StandardButton.Yes:
+                return
+
+        jobs = list(zip(self._states, output_paths))
+        self._set_busy(True, f"Exporting {len(jobs)} collage(s)...")
         self._export_thread = QThread(self)
-        self._export_worker = _ExportWorker(self._state, destination_path)
+        self._export_worker = _ExportWorker(jobs)
         self._export_worker.moveToThread(self._export_thread)
         self._export_thread.started.connect(self._export_worker.run)
         self._export_worker.finished.connect(self._on_export_finished)
@@ -434,7 +533,15 @@ class EditorPage(QWidget):
         self._export_thread.start()
 
     def _on_export_finished(self, success: bool, message: str) -> None:
-        self._set_busy(False, "No slot selected." if self._selected_slot_index is None else self._status_label.text())
+        if self._selected_slot_index is None:
+            status_text = "No slot selected."
+        else:
+            widget = self._slot_widgets[self._selected_slot_index]
+            slot_state = "filled" if widget.assignment() is not None else "empty"
+            status_text = (
+                f"Slot {self._selected_slot_index + 1} selected ({slot_state})."
+            )
+        self._set_busy(False, status_text)
         if success:
             QMessageBox.information(self, "Export complete", f"Collage saved to:\n{message}")
         else:
@@ -448,8 +555,23 @@ class EditorPage(QWidget):
         self._export_button.setEnabled(not busy)
         self._back_button.setEnabled(not busy)
         self._restart_button.setEnabled(not busy)
+        self._previous_button.setEnabled(
+            not busy and self._state_index > 0
+        )
+        self._next_button.setEnabled(
+            not busy and self._state_index < len(self._states) - 1
+        )
+        for button in (
+            self._center_button,
+            self._reset_all_button,
+            self._replace_button,
+            self._remove_button,
+        ):
+            button.setEnabled(not busy and button.isEnabled())
         self.setCursor(Qt.CursorShape.WaitCursor if busy else Qt.CursorShape.ArrowCursor)
         self._status_label.setText(status_text)
+        if not busy:
+            self._update_slot_action_buttons()
 
 
 class _EmptyStatePlaceholder:

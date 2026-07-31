@@ -1,12 +1,13 @@
 """Page 1: print size selection and image import.
 
-Presents the two supported print sizes, shows the resulting slot count,
-and lets the user pick up to that many source images via the native
-Windows file picker before continuing to the editor.
+Presents the supported print sizes, shows the resulting per-print slot
+count, and lets the user choose any number of source images via the native
+Windows file picker before continuing to the batched editor.
 """
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Optional
 
@@ -62,16 +63,21 @@ class SelectionPage(QWidget):
         layout.addWidget(subtitle)
 
         size_row = QHBoxLayout()
+        self._radio_4x6 = QRadioButton(PRINT_SIZE_LABELS[PrintSizeId.FOUR_BY_SIX])
         self._radio_5x7 = QRadioButton(PRINT_SIZE_LABELS[PrintSizeId.FIVE_BY_SEVEN])
         self._radio_8x10 = QRadioButton(PRINT_SIZE_LABELS[PrintSizeId.EIGHT_BY_TEN])
         self._radio_5x7.setChecked(True)
+        self._radio_4x6.setToolTip("Standard 4 x 6 inch print")
         self._radio_5x7.setToolTip("Standard 5 x 7 inch print")
         self._radio_8x10.setToolTip("Standard 8 x 10 inch print")
         self._size_group = QButtonGroup(self)
+        self._size_group.addButton(self._radio_4x6)
         self._size_group.addButton(self._radio_5x7)
         self._size_group.addButton(self._radio_8x10)
+        self._radio_4x6.toggled.connect(self._on_print_size_changed)
         self._radio_5x7.toggled.connect(self._on_print_size_changed)
         self._radio_8x10.toggled.connect(self._on_print_size_changed)
+        size_row.addWidget(self._radio_4x6)
         size_row.addWidget(self._radio_5x7)
         size_row.addWidget(self._radio_8x10)
         size_row.addStretch(1)
@@ -131,7 +137,11 @@ class SelectionPage(QWidget):
     # -- helpers -------------------------------------------------------
 
     def _current_print_size_id(self) -> PrintSizeId:
-        return PrintSizeId.FIVE_BY_SEVEN if self._radio_5x7.isChecked() else PrintSizeId.EIGHT_BY_TEN
+        if self._radio_4x6.isChecked():
+            return PrintSizeId.FOUR_BY_SIX
+        if self._radio_8x10.isChecked():
+            return PrintSizeId.EIGHT_BY_TEN
+        return PrintSizeId.FIVE_BY_SEVEN
 
     def _max_slot_count(self) -> int:
         return compute_canvas_layout(self._current_print_size_id()).slot_count
@@ -144,7 +154,18 @@ class SelectionPage(QWidget):
             f"({width_mm:.1f} mm x {height_mm:.1f} mm)"
         )
         max_slots = self._max_slot_count()
-        self._capacity_label.setText(f"This layout can hold up to {max_slots} image(s).")
+        count = len(self._selected_files)
+        if count:
+            output_count = math.ceil(count / max_slots)
+            self._capacity_label.setText(
+                f"Each print holds {max_slots} image(s). "
+                f"Your selection will create {output_count} print(s)."
+            )
+        else:
+            self._capacity_label.setText(
+                f"Each print holds up to {max_slots} image(s). "
+                "Select any number of photos to create a batch."
+            )
         self._revalidate()
 
     def _on_browse_clicked(self) -> None:
@@ -166,7 +187,7 @@ class SelectionPage(QWidget):
             else:
                 unsupported.append(os.path.basename(path))
 
-        self._selected_files = supported
+        self._selected_files.extend(supported)
         self._refresh_file_list()
 
         if unsupported:
@@ -181,6 +202,8 @@ class SelectionPage(QWidget):
             self._file_list_widget.addItem(os.path.basename(path))
         self._count_label.setText(f"{len(self._selected_files)} photo(s) selected")
         self._update_remove_buttons()
+        if hasattr(self, "_capacity_label"):
+            self._on_print_size_changed()
 
     def _update_remove_buttons(self) -> None:
         self._remove_selected_button.setEnabled(bool(self._file_list_widget.selectedItems()))
@@ -206,16 +229,9 @@ class SelectionPage(QWidget):
         self._revalidate()
 
     def _revalidate(self) -> None:
-        max_slots = self._max_slot_count()
         count = len(self._selected_files)
 
-        if count > max_slots:
-            self._validation_label.setText(
-                f"You selected {count} photos, but this layout only holds {max_slots}. "
-                "Please remove some photos or choose a larger print size."
-            )
-            self._continue_button.setEnabled(False)
-        elif count == 0:
+        if count == 0:
             if not self._validation_label.text().startswith("Ignored"):
                 self._validation_label.setText("")
             self._continue_button.setEnabled(False)
@@ -225,8 +241,7 @@ class SelectionPage(QWidget):
             self._continue_button.setEnabled(True)
 
     def _on_continue_clicked(self) -> None:
-        max_slots = self._max_slot_count()
-        if not self._selected_files or len(self._selected_files) > max_slots:
+        if not self._selected_files:
             self._revalidate()
             return
         self.continue_requested.emit(self._current_print_size_id(), list(self._selected_files))
@@ -238,7 +253,9 @@ class SelectionPage(QWidget):
         when the user navigates Back from the editor without having
         changed their photos."""
 
-        if print_size_id == PrintSizeId.EIGHT_BY_TEN:
+        if print_size_id == PrintSizeId.FOUR_BY_SIX:
+            self._radio_4x6.setChecked(True)
+        elif print_size_id == PrintSizeId.EIGHT_BY_TEN:
             self._radio_8x10.setChecked(True)
         else:
             self._radio_5x7.setChecked(True)

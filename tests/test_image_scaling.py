@@ -154,6 +154,13 @@ def _build_state_with_images(tmp_path: Path, print_size_id: PrintSizeId, count: 
     return state
 
 
+def test_render_collage_4x6_has_one_slot_and_correct_dimensions(tmp_path: Path):
+    state = _build_state_with_images(tmp_path, PrintSizeId.FOUR_BY_SIX, count=1)
+    assert state.layout.slot_count == 1
+    canvas = render_collage(state)
+    assert canvas.size == export_canvas_pixel_size(state.layout, state.export_dpi)
+
+
 def test_render_collage_matches_export_pixel_dimensions(tmp_path: Path):
     state = _build_state_with_images(tmp_path, PrintSizeId.FIVE_BY_SEVEN, count=1)
     canvas = render_collage(state)

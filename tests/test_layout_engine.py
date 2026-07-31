@@ -56,6 +56,16 @@ def test_px_to_mm_round_trip_approximately():
 # ---------------------------------------------------------------------------
 
 
+def test_4x6_layout_is_landscape_with_one_slot():
+    layout = compute_canvas_layout(PrintSizeId.FOUR_BY_SIX)
+    assert layout.orientation == Orientation.LANDSCAPE
+    assert layout.columns == 1
+    assert layout.rows == 1
+    assert layout.slot_count == 1
+    assert layout.canvas_width_mm == pytest.approx(152.4)
+    assert layout.canvas_height_mm == pytest.approx(101.6)
+
+
 def test_5x7_layout_is_portrait_with_two_slots():
     layout = compute_canvas_layout(PrintSizeId.FIVE_BY_SEVEN)
     assert layout.orientation == Orientation.PORTRAIT
@@ -94,7 +104,11 @@ def test_slots_are_in_reading_order():
 
 
 def test_all_slots_have_fixed_slot_dimensions():
-    for size_id in (PrintSizeId.FIVE_BY_SEVEN, PrintSizeId.EIGHT_BY_TEN):
+    for size_id in (
+        PrintSizeId.FOUR_BY_SIX,
+        PrintSizeId.FIVE_BY_SEVEN,
+        PrintSizeId.EIGHT_BY_TEN,
+    ):
         layout = compute_canvas_layout(size_id)
         for slot in layout.slots:
             assert slot.width_mm == pytest.approx(111.0)
@@ -102,6 +116,11 @@ def test_all_slots_have_fixed_slot_dimensions():
 
 
 def test_export_canvas_pixel_size_at_300_dpi():
+    layout_4x6 = compute_canvas_layout(PrintSizeId.FOUR_BY_SIX)
+    width_px, height_px = export_canvas_pixel_size(layout_4x6, DEFAULT_EXPORT_DPI)
+    assert width_px == mm_to_px(152.4, 300)
+    assert height_px == mm_to_px(101.6, 300)
+
     layout_5x7 = compute_canvas_layout(PrintSizeId.FIVE_BY_SEVEN)
     width_px, height_px = export_canvas_pixel_size(layout_5x7, DEFAULT_EXPORT_DPI)
     assert width_px == mm_to_px(127.0, 300)
